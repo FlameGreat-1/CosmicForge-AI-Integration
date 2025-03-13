@@ -67,20 +67,43 @@ def check_health_model_loaded():
     logger.error("Timed out waiting for Health Analytics model to load")
     return False
 
+def check_service_health(port, endpoint="/health"):
+    """Check if a service is healthy"""
+    for i in range(30):
+        try:
+            response = requests.get(f"http://{HOST}:{port}{endpoint}", timeout=5)
+            if response.status_code == 200:
+                return True
+        except requests.RequestException:
+            pass
+        time.sleep(10)
+    return False
+
+def run_subprocess(cmd, name):
+    """Run a subprocess with proper logging and error handling"""
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        processes[name] = process
+        
+        def log_output(stream, log_level):
+            for line in stream:
+                logger.log(log_level, f"{name}: {line.decode().strip()}")
+        
+        threading.Thread(target=log_output, args=(process.stdout, logging.INFO), daemon=True).start()
+        threading.Thread(target=log_output, args=(process.stderr, logging.ERROR), daemon=True).start()
+        
+        return process
+    except Exception as e:
+        logger.error(f"Failed to start {name}: {str(e)}")
+        return None
+
 def run_health_analytics():
     """Run the Health Analytics application with worker scaling"""
-    global processes
-    
-    # Create log files
     access_log = log_dir / "health_analytics" / "access.log"
     error_log = log_dir / "health_analytics" / "error.log"
     
-    # Start with initial workers for model loading
-    logger.info(f"Starting Health Analytics on port {HEALTH_PORT} with {WORKERS_INITIAL} worker(s)...")
-    
     os.chdir(f"{APP_HOME}/CosmicForge-Health-Analytics")
     
-    # Use gunicorn for Health Analytics (as in original start.sh)
     cmd = [
         "gunicorn", 
         "main:app", 
@@ -92,47 +115,27 @@ def run_health_analytics():
         "--error-logfile", str(error_log)
     ]
     
-    processes["health_analytics"] = subprocess.Popen(cmd)
+    process = run_subprocess(cmd, "health_analytics")
     
-    # Wait for model to load
-    model_loaded = check_health_model_loaded()
-    
-    # If model loaded successfully and we want more workers, restart
-    if model_loaded and WORKERS_FINAL > WORKERS_INITIAL:
-        logger.info(f"Restarting Health Analytics with {WORKERS_FINAL} workers...")
-        
-        # Terminate the initial process
-        if processes["health_analytics"]:
-            processes["health_analytics"].terminate()
-            processes["health_analytics"].wait()
-        
-        # Start with final worker count
-        cmd = [
-            "gunicorn", 
-            "main:app", 
-            "-w", str(WORKERS_FINAL),
-            "-k", "uvicorn.workers.UvicornWorker",
-            "--bind", f"{HOST}:{HEALTH_PORT}",
-            "--timeout", str(TIMEOUT),
-            "--preload",
-            "--access-logfile", str(access_log),
-            "--error-logfile", str(error_log)
-        ]
-        
-        processes["health_analytics"] = subprocess.Popen(cmd)
+    if process and check_health_model_loaded():
+        if WORKERS_FINAL > WORKERS_INITIAL:
+            logger.info(f"Restarting Health Analytics with {WORKERS_FINAL} workers...")
+            process.terminate()
+            process.wait()
+            
+            cmd[3] = str(WORKERS_FINAL)
+            cmd.extend(["--preload"])
+            
+            run_subprocess(cmd, "health_analytics")
+    else:
+        logger.error("Failed to start Health Analytics")
 
 def run_medical_diagnosis():
     """Run the Medical Diagnosis application"""
-    global processes
-    
-    # Create log file
     log_file = log_dir / "medical_diagnosis" / "access.log"
-    
-    logger.info(f"Starting Medical Diagnosis System on port {DIAGNOSIS_PORT}...")
     
     os.chdir(f"{APP_HOME}/medical_diagnosis_system")
     
-    # Use uvicorn for Medical Diagnosis (as in original Dockerfile)
     cmd = [
         "uvicorn", 
         "main:app", 
@@ -142,20 +145,14 @@ def run_medical_diagnosis():
         "--log-file", str(log_file)
     ]
     
-    processes["medical_diagnosis"] = subprocess.Popen(cmd)
+    run_subprocess(cmd, "medical_diagnosis")
 
 def run_medical_chatbot():
     """Run the Medical Chatbot application"""
-    global processes
-    
-    # Create log file
     log_file = log_dir / "medical_chatbot" / "access.log"
-    
-    logger.info(f"Starting Medical Chatbot on port {CHATBOT_PORT}...")
     
     os.chdir(f"{APP_HOME}/cosmicforge_ai_chatbot")
     
-    # Use uvicorn for Medical Chatbot (as in original Dockerfile)
     cmd = [
         "uvicorn", 
         "main:app", 
@@ -165,48 +162,40 @@ def run_medical_chatbot():
         "--log-file", str(log_file)
     ]
     
-    processes["medical_chatbot"] = subprocess.Popen(cmd)
+    run_subprocess(cmd, "medical_chatbot")
 
 def monitor_processes():
     """Monitor all processes and restart if they fail"""
-    global processes
-    
     while True:
-        # Check Health Analytics
-        if processes["health_analytics"] and processes["health_analytics"].poll() is not None:
-            logger.warning("Health Analytics process died, restarting...")
-            health_thread = threading.Thread(target=run_health_analytics)
-            health_thread.daemon = True
-            health_thread.start()
+        for name, process in processes.items():
+            if process and process.poll() is not None:
+                logger.warning(f"{name} process died, restarting...")
+                if name == "health_analytics":
+                    threading.Thread(target=run_health_analytics, daemon=True).start()
+                elif name == "medical_diagnosis":
+                    threading.Thread(target=run_medical_diagnosis, daemon=True).start()
+                elif name == "medical_chatbot":
+                    threading.Thread(target=run_medical_chatbot, daemon=True).start()
         
-        # Check Medical Diagnosis
-        if processes["medical_diagnosis"] and processes["medical_diagnosis"].poll() is not None:
-            logger.warning("Medical Diagnosis process died, restarting...")
-            diagnosis_thread = threading.Thread(target=run_medical_diagnosis)
-            diagnosis_thread.daemon = True
-            diagnosis_thread.start()
-        
-        # Check Medical Chatbot
-        if processes["medical_chatbot"] and processes["medical_chatbot"].poll() is not None:
-            logger.warning("Medical Chatbot process died, restarting...")
-            chatbot_thread = threading.Thread(target=run_medical_chatbot)
-            chatbot_thread.daemon = True
-            chatbot_thread.start()
-        
-        # Log resource usage
         log_resource_usage()
-        
-        # Sleep before next check
         time.sleep(30)
 
 def log_resource_usage():
-    """Log system resource usage"""
+    """Log system and process resource usage"""
     try:
         cpu_percent = psutil.cpu_percent()
         memory_percent = psutil.virtual_memory().percent
         disk_percent = psutil.disk_usage('/').percent
         
-        logger.info(f"Resource usage - CPU: {cpu_percent}%, Memory: {memory_percent}%, Disk: {disk_percent}%")
+        logger.info(f"System resource usage - CPU: {cpu_percent}%, Memory: {memory_percent}%, Disk: {disk_percent}%")
+        
+        for name, process in processes.items():
+            if process:
+                try:
+                    p = psutil.Process(process.pid)
+                    logger.info(f"{name} resource usage - CPU: {p.cpu_percent()}%, Memory: {p.memory_percent()}%")
+                except psutil.NoSuchProcess:
+                    logger.warning(f"{name} process not found")
     except Exception as e:
         logger.error(f"Error logging resource usage: {str(e)}")
 
@@ -214,13 +203,12 @@ def handle_shutdown(signum, frame):
     """Handle shutdown signals"""
     logger.info(f"Received signal {signum}, shutting down all services...")
     
-    # Terminate all processes
     for name, process in processes.items():
         if process:
             logger.info(f"Terminating {name}...")
             try:
                 process.terminate()
-                process.wait(timeout=5)
+                process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 logger.warning(f"{name} did not terminate gracefully, killing...")
                 process.kill()
@@ -230,13 +218,21 @@ def handle_shutdown(signum, frame):
     logger.info("All services shut down")
     sys.exit(0)
 
+def validate_environment():
+    """Validate critical environment variables"""
+    required_vars = ["APP_HOME", "MODEL_PATH", "HF_TOKEN", "API_KEY"]
+    for var in required_vars:
+        if not os.environ.get(var):
+            logger.error(f"Required environment variable {var} is not set")
+            sys.exit(1)
+
 if __name__ == "__main__":
-    # Check if model exists
+    validate_environment()
+    
     if not os.path.exists(MODEL_PATH) or not os.listdir(MODEL_PATH):
         logger.error(f"Model not found at {MODEL_PATH}. Please ensure the model is downloaded.")
         sys.exit(1)
-        
-    # Print startup banner
+    
     logger.info("=" * 80)
     logger.info("Starting AI Integration Platform")
     logger.info(f"Using local model at {MODEL_PATH}")
@@ -245,31 +241,16 @@ if __name__ == "__main__":
     logger.info(f"Medical Chatbot: http://{HOST}:{CHATBOT_PORT}")
     logger.info("=" * 80)
     
-    # Register signal handlers
     signal.signal(signal.SIGTERM, handle_shutdown)
     signal.signal(signal.SIGINT, handle_shutdown)
     
-    # Create threads for each application
-    health_thread = threading.Thread(target=run_health_analytics)
-    diagnosis_thread = threading.Thread(target=run_medical_diagnosis)
-    chatbot_thread = threading.Thread(target=run_medical_chatbot)
+    threading.Thread(target=run_health_analytics, daemon=True).start()
+    threading.Thread(target=run_medical_diagnosis, daemon=True).start()
+    threading.Thread(target=run_medical_chatbot, daemon=True).start()
     
-    # Set as daemon threads so they exit when main thread exits
-    health_thread.daemon = True
-    diagnosis_thread.daemon = True
-    chatbot_thread.daemon = True
-    
-    # Start all threads
-    health_thread.start()
-    diagnosis_thread.start()
-    chatbot_thread.start()
-    
-    # Start monitoring thread
-    monitor_thread = threading.Thread(target=monitor_processes)
-    monitor_thread.daemon = True
+    monitor_thread = threading.Thread(target=monitor_processes, daemon=True)
     monitor_thread.start()
     
-    # Wait for all threads to complete (which won't happen unless interrupted)
     try:
         while True:
             time.sleep(1)

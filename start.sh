@@ -12,8 +12,6 @@ handle_error() {
     exit 1
 }
 
-log_message "Starting initialization process..."
-
 # Set all environment variables
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONUNBUFFERED=1
@@ -21,8 +19,6 @@ export APP_HOME="/root/cosmic_app"
 export TRANSFORMERS_CACHE="/root/cosmic_app/model_cache"
 export LOG_DIR="/root/cosmic_app/logs"
 export DATA_DIR="/root/cosmic_storage"  # Using persistent storage
-export HF_TOKEN="${HF_TOKEN:-}"
-export API_KEY="${API_KEY:-}"
 export MODEL_CACHE_DIR="/root/cosmic_app/model_cache"
 export NLTK_DATA="/root/cosmic_app/nltk_data"
 export PYTHONPATH=$APP_HOME
@@ -38,7 +34,20 @@ export WORKERS_INITIAL=${WORKERS_INITIAL:-1}
 export WORKERS_FINAL=${WORKERS_FINAL:-4}
 export TIMEOUT=${TIMEOUT:-300}
 
+# Create log directory
+mkdir -p "$LOG_DIR"
+
+log_message "Starting initialization process..."
 log_message "Environment variables set. APP_HOME: $APP_HOME"
+
+# Check for required environment variables
+if [ -z "$HF_TOKEN" ]; then
+    handle_error "HF_TOKEN is not set. Please provide a valid Hugging Face token."
+fi
+
+if [ -z "$API_KEY" ]; then
+    handle_error "API_KEY is not set. Please provide a valid API key."
+fi
 
 # Check Python environment
 log_message "Python path: $(which python)"
@@ -48,13 +57,13 @@ pip list >> "$LOG_DIR/startup_log.txt"
 
 # Create all necessary directories
 log_message "Creating necessary directories..."
-mkdir -p $TRANSFORMERS_CACHE $LOG_DIR $MODEL_CACHE_DIR $NLTK_DATA \
+mkdir -p $TRANSFORMERS_CACHE $MODEL_CACHE_DIR $NLTK_DATA \
     $APP_HOME/medical_diagnosis_system/data \
     $APP_HOME/cosmicforge_ai_chatbot/data \
     $APP_HOME/CosmicForge-Health-Analytics/data \
     $APP_HOME/logs/health_analytics \
     $APP_HOME/logs/medical_diagnosis \
-    $APP_HOME/logs/medical_chatbot
+    $APP_HOME/logs/medical_chatbot || handle_error "Failed to create necessary directories"
 log_message "Directories created successfully."
 
 # Set permissions (excluding DATA_DIR)
@@ -62,7 +71,7 @@ log_message "Setting permissions..."
 chmod -R 755 $TRANSFORMERS_CACHE $LOG_DIR $MODEL_CACHE_DIR $NLTK_DATA \
     $APP_HOME/medical_diagnosis_system/data \
     $APP_HOME/cosmicforge_ai_chatbot/data \
-    $APP_HOME/CosmicForge-Health-Analytics/data
+    $APP_HOME/CosmicForge-Health-Analytics/data || handle_error "Failed to set permissions"
 log_message "Permissions set successfully."
 
 # Download NLTK data if not already downloaded
@@ -87,13 +96,6 @@ if [ ! -d "$APP_HOME/Model" ] || [ -z "$(ls -A $APP_HOME/Model 2>/dev/null)" ]; 
     # Create a temporary directory for download
     TEMP_DIR="/tmp/model_download"
     mkdir -p "$TEMP_DIR"
-    
-    # Check if HF_TOKEN is set
-    if [ -z "$HF_TOKEN" ]; then
-        log_message "WARNING: HF_TOKEN environment variable not set. Attempting anonymous download..."
-    else
-        log_message "HF_TOKEN found. Using authenticated download."
-    fi
     
     # Install huggingface_hub if not already installed
     if ! pip list | grep -q huggingface_hub; then
@@ -181,18 +183,8 @@ if [ -f "$APP_HOME/requirements.txt" ]; then
     pip install --no-cache-dir -r "$APP_HOME/requirements.txt" || handle_error "Failed to install dependencies"
     log_message "Dependencies installed successfully."
 else
-    log_message "WARNING: requirements.txt not found in $APP_HOME. Skipping dependency installation."
+    handle_error "requirements.txt not found in $APP_HOME. Cannot proceed without dependencies."
 fi
-
-# Explicitly install nltk
-log_message "Installing nltk..."
-pip install --no-cache-dir nltk || handle_error "Failed to install nltk"
-log_message "nltk installed successfully."
-
-# Ensure nltk data is downloaded
-log_message "Downloading NLTK data..."
-python -m nltk.downloader -d $NLTK_DATA punkt stopwords wordnet || handle_error "Failed to download NLTK data"
-log_message "NLTK data downloaded successfully."
 
 # Set model environment variables
 export MODEL_PATH="$APP_HOME/Model"
@@ -209,12 +201,12 @@ if [ ! -f "$APP_HOME/main.py" ]; then
     handle_error "main.py not found in $APP_HOME"
 fi
 
-# Run the orchestration main.py
-cd $APP_HOME
-python main.py
+# Run the orchestration main.py with timeout
+log_message "Executing main.py..."
+timeout 3600 python main.py 2>&1 | tee -a "$LOG_DIR/main_execution.log" || handle_error "main.py execution failed or timed out after 1 hour"
 
-# Check if main.py exited with an error
-if [ $? -ne 0 ]; then
+# Check if main.py exited successfully
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     handle_error "main.py exited with non-zero status"
 fi
 
