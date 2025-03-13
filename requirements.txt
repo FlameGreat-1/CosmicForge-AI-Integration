@@ -1,0 +1,36 @@
+# Core ML libraries
+transformers==4.38.2
+torch==2.0.1
+bitsandbytes==0.39.0
+accelerate>=0.26.0
+safetensors>=0.4.1
+datasets==2.13.1
+scikit-learn==1.2.2
+scipy==1.10.1
+huggingface_hub
+
+# Data processing
+numpy==1.24.3
+pandas==2.0.1
+cachetools==5.3.1
+joblib==1.2.0
+nltk
+sentencepiece
+tokenizers<0.19,>=0.14
+protobuf==3.20.3
+
+# Web frameworks and API
+fastapi==0.95.1
+uvicorn==0.22.0
+gunicorn>=20.1.0
+starlette==0.26.1
+python-multipart==0.0.6
+pydantic==1.10.7
+
+# Utilities
+psutil==5.9.5
+python-dotenv==1.0.0
+requests==2.30.0
+asyncio
+httpx==0.24.0
+aiofiles==23.1.0
