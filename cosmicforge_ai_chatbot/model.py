@@ -98,9 +98,8 @@ class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
         return model
 
     @staticmethod
-    @staticmethod
-def load_config(model_path):
-    config_path = os.path.join(model_path, "config.json")
+    def load_config(model_path):
+        config_path = os.path.join(model_path, "config.json")
     with open(config_path, "r") as f:
         config_dict = json.load(f)
     
