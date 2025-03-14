@@ -279,3 +279,107 @@ This project is licensed under the Apache License 2.0 - see the LICENSE file for
 ## Support
 
 For support or questions, please open an issue on the GitHub repository or contact support@example.com.
+
+
+
+
+
+Verify that the repository has been cloned:
+
+ls /root/cosmic_app
+Insert at cursor
+
+
+
+If the repository is not there, clone it manually:
+
+git clone https://github.com/FlameGreat-1/CosmicForge-AI-Integration.git /root/cosmic_app
+Insert at cursor
+
+
+
+Check if the start.sh script exists:
+
+ls /root/cosmic_app/start.sh
+
+
+Set the required environment variables:
+
+export HF_TOKEN=
+export API_KEY=LkGaxbtyLthjp0VUA9TgUvnMY0aweonr
+Insert at cursor
+
+
+
+Run the start script again:
+
+bash /root/cosmic_app/start.sh
+Insert at cursor
+
+
+
+After the script completes, check if the processes are running:
+
+ps aux | grep python
+Insert at cursor
+
+
+
+Check the logs:
+
+cat /root/cosmic_app/logs/startup_log.txt
+cat /root/cosmic_app/logs/main_execution.log
+Insert at cursor
+
+
+
+If netstat is not available, you can use this alternative to check if the ports are in use:
+
+ss -tulpn | grep -E '7860|7861|786
+
+
+
+
+To resolve the NLTK installation issue and complete the setup, follow these steps:
+
+
+Install NLTK:
+
+pip install nltk
+Insert at cursor
+
+
+
+Modify the start.sh script to include NLTK installation:
+Add this line before the NLTK data download command:
+
+pip install --no-cache-dir nltk
+Insert at cursor
+
+
+
+Run the start script again:
+
+bash /root/cosmic_app/start.sh
+Insert at cursor
+
+
+
+If the script completes successfully, check if the processes are running:
+
+ps aux | grep python
+Insert at cursor
+
+
+
+Check the logs:
+
+cat /root/cosmic_app/logs/startup_log.txt
+cat /root/cosmic_app/logs/main_execution.log
+Insert at cursor
+
+
+
+Check if the ports are in use:
+
+ss -tulpn | grep -E '7860|7861|7862
