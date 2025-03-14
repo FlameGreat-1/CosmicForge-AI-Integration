@@ -7,27 +7,33 @@ import asyncio
 import os
 from fastapi import HTTPException
 import psutil
+import json
 
 logger = setup_logger()
 
 def split_model_into_shards(model_path, shard_size=1000000000):
     logger.info(f"Checking if model sharding is needed for: {model_path}")
     
+    model_shard_dir = os.path.join(Config.DATA_DIR, "model_shards")
+    os.makedirs(model_shard_dir, exist_ok=True)
+    
+    # Check if model is already sharded
+    if any(file.startswith("model_shard_") for file in os.listdir(model_shard_dir)):
+        logger.info("Model is already sharded. Skipping sharding process.")
+        return model_shard_dir
+
     if not os.path.exists(model_path):
         logger.error(f"Model path does not exist: {model_path}")
         raise ValueError(f"Model path {model_path} does not exist. Only local models are supported.")
     
-    # Create a model-specific directory for shards
-    model_shard_dir = os.path.join(Config.DATA_DIR, "model_shards")
-    os.makedirs(model_shard_dir, exist_ok=True)
-    
     try:
         logger.info(f"Loading model from local path: {model_path}")
-        model = LlamaForCausalLM.from_pretrained(
-            model_path, 
-            local_files_only=True,  
-            low_cpu_mem_usage=True
-        )
+        with torch.no_grad():
+            model = LlamaForCausalLM.from_pretrained(
+                model_path, 
+                local_files_only=True,  
+                low_cpu_mem_usage=True
+            )
         
         state_dict = model.state_dict()
         
@@ -67,17 +73,14 @@ def split_model_into_shards(model_path, shard_size=1000000000):
         
         del model
         del state_dict
-        import gc
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
             
         return model_shard_dir  
         
     except Exception as e:
         logger.error(f"Error splitting model into shards: {str(e)}", exc_info=True)
-        raise  
-        
+        raise
+
 class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
     def __init__(self, config):
         super().__init__(config)
@@ -87,19 +90,46 @@ class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
         self.device_map = None
         self.gradient_checkpointing_enable()
 
-    def load_shard(self, shard_id):
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        config = cls.load_config(pretrained_model_name_or_path)
+        model = cls(config)
+        model.load_pretrained_shards(pretrained_model_name_or_path)
+        return model
+
+    @staticmethod
+    def load_config(model_path):
+        config_path = os.path.join(model_path, "config.json")
+        with open(config_path, "r") as f:
+            config_dict = json.load(f)
+        return LlamaForCausalLM.config_class.from_dict(config_dict)
+
+    def load_pretrained_shards(self, model_path):
         model_shard_dir = os.path.join(Config.DATA_DIR, "model_shards")
-        shard_path = os.path.join(model_shard_dir, f"model_shard_{shard_id}.pt")
-        if os.path.exists(shard_path):
-            self.loaded_shards[shard_id] = torch.load(shard_path, map_location='cpu')
-            self.load_state_dict(self.loaded_shards[shard_id], strict=False)
-        else:
-            logger.warning(f"Shard {shard_id} not found")
+        for shard_file in os.listdir(model_shard_dir):
+            if shard_file.startswith("model_shard_") and shard_file.endswith(".pt"):
+                shard_id = int(shard_file.split("_")[-1].split(".")[0])
+                self.load_shard(shard_id)
+
+    def load_shard(self, shard_id):
+        try:
+            model_shard_dir = os.path.join(Config.DATA_DIR, "model_shards")
+            shard_path = os.path.join(model_shard_dir, f"model_shard_{shard_id}.pt")
+            if os.path.exists(shard_path):
+                self.loaded_shards[shard_id] = torch.load(shard_path, map_location='cpu')
+                self.load_state_dict(self.loaded_shards[shard_id], strict=False)
+            else:
+                logger.warning(f"Shard {shard_id} not found")
+        except Exception as e:
+            logger.error(f"Error loading shard {shard_id}: {str(e)}", exc_info=True)
 
     def unload_shard(self, shard_id):
-        if shard_id in self.loaded_shards:
-            del self.loaded_shards[shard_id]
-            torch.cuda.empty_cache()
+        try:
+            if shard_id in self.loaded_shards:
+                del self.loaded_shards[shard_id]
+                torch.cuda.empty_cache()
+        except Exception as e:
+            logger.error(f"Error unloading shard {shard_id}: {str(e)}", exc_info=True)
 
     def forward(self, input_ids, attention_mask=None, **kwargs):
         required_shards = set(input_ids.div(self.shard_size, rounding_mode='floor').unique().tolist())
@@ -133,17 +163,19 @@ class MedicalDiagnosisModel:
         return cls._instance
 
     async def load_model(self):
+        if self.model is not None:
+            logger.info("Model is already loaded.")
+            return
+
         logger.info("Loading MedicalDiagnosis model")
         try:
             model_path = Config.MODEL_PATH
             persistent_path = os.path.join(Config.DATA_DIR, "medical_diagnosis_model")
             os.makedirs(persistent_path, exist_ok=True)
             
-            # Create model shards directory
             model_shard_dir = os.path.join(Config.DATA_DIR, "model_shards")
             os.makedirs(model_shard_dir, exist_ok=True)
 
-            # Check if shards exist, if not, create them
             if not any(file.startswith("model_shard_") for file in os.listdir(model_shard_dir)):
                 logger.info("Model shards not found. Creating shards...")
                 await asyncio.to_thread(split_model_into_shards, model_path)
@@ -156,7 +188,6 @@ class MedicalDiagnosisModel:
             logger.info(f"Tokenizer class: {self.tokenizer.__class__.__name__}")
             logger.info(f"Tokenizer vocab size: {self.tokenizer.vocab_size}")
 
-            # Check for GPU availability
             if torch.cuda.is_available():
                 logger.info("GPU is available. Using 8-bit quantization.")
                 bnb_config = BitsAndBytesConfig(
@@ -170,19 +201,17 @@ class MedicalDiagnosisModel:
                 logger.info("GPU is not available. Loading model in 32-bit precision.")
                 quantization_config = None
 
-            config = LlamaForCausalLM.config_class.from_pretrained(model_path, local_files_only=True)
+            config = MemoryEfficientShardedLlamaForCausalLM.load_config(model_path)
 
             self.model = await asyncio.to_thread(
                 MemoryEfficientShardedLlamaForCausalLM.from_pretrained,
                 model_path,
                 config=config,
-                local_files_only=True,
                 quantization_config=quantization_config,
                 device_map="auto",
                 low_cpu_mem_usage=True,
             )
 
-            # Use model parallelism if multiple GPUs are available
             if torch.cuda.device_count() > 1:
                 self.model.parallelize()
 
@@ -233,3 +262,13 @@ class MedicalDiagnosisModel:
             cls._instance = cls()
             await cls._instance.load_model()
         return cls._instance
+
+    async def cleanup(self):
+        if self.model:
+            del self.model
+        if self.tokenizer:
+            del self.tokenizer
+        self.model = None
+        self.tokenizer = None
+        torch.cuda.empty_cache()
+        logger.info("Model cleanup completed")
