@@ -7,7 +7,9 @@ from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from medical_diagnosis_system.medical_diagnosis import MedicalDiagnosis
-from .config import Config
+from cosmicforge_ai_chatbot.config import Config
+from pydantic import BaseModel
+from cosmicforge_ai_chatbot.config import Config
 import logging
 import os
 from dotenv import load_dotenv

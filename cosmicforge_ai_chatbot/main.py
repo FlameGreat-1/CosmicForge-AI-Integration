@@ -6,7 +6,8 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import RedirectResponse
 from cosmicforge_ai_chatbot.cosmicforge_chatbot import CosmicForgeMedicalChat
-from .config import Config
+from pydantic import BaseModel
+from cosmicforge_ai_chatbot.config import Config
 import logging
 import os
 from dotenv import load_dotenv
