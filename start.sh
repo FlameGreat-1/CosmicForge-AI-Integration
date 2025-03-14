@@ -203,9 +203,9 @@ fi
 
 # Run the orchestration main.py with timeout
 log_message "Executing main.py..."
-timeout 3600 python main.py 2>&1 | tee -a "$LOG_DIR/main_execution.log" || handle_error "main.py execution failed or timed out after 1 hour"
+timeout 3600 python /root/cosmic_app/main.py 2>&1 | tee -a "$LOG_DIR/main_execution.log" || handle_error "main.py execution failed or timed out after 1 hour"
 
-# Check if main.py exited successfully
+ # Check if main.py exited successfully
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     handle_error "main.py exited with non-zero status"
 fi
