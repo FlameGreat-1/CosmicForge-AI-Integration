@@ -5,8 +5,7 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
-from .cosmicforge_chatbot import CosmicForgeMedicalChat
+from cosmicforge_ai_chatbot.cosmicforge_chatbot import CosmicForgeMedicalChat
 from .config import Config
 import logging
 import os

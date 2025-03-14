@@ -6,7 +6,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from .medical_diagnosis import MedicalDiagnosis
+from medical_diagnosis_system.medical_diagnosis import MedicalDiagnosis
 from .config import Config
 import logging
 import os
