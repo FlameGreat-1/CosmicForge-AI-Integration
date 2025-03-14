@@ -102,6 +102,25 @@ class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
         config_path = os.path.join(model_path, "config.json")
         with open(config_path, "r") as f:
             config_dict = json.load(f)
+        
+        # Fix rope_scaling if it's present and not in the correct format
+        if "rope_scaling" in config_dict:
+            if isinstance(config_dict["rope_scaling"], dict):
+                if "type" not in config_dict["rope_scaling"] or "factor" not in config_dict["rope_scaling"]:
+                    config_dict["rope_scaling"] = {
+                        "type": "linear",
+                        "factor": 32.0
+                    }
+            else:
+                config_dict["rope_scaling"] = {
+                    "type": "linear",
+                    "factor": 32.0
+                }
+        
+        # Ensure other necessary parameters are present
+        config_dict.setdefault("rope_theta", 10000)
+        config_dict.setdefault("rope_scaling_factor", 1.0)
+        
         return LlamaForCausalLM.config_class.from_dict(config_dict)
 
     def load_pretrained_shards(self, model_path):
@@ -202,6 +221,7 @@ class MedicalDiagnosisModel:
                 quantization_config = None
 
             config = MemoryEfficientShardedLlamaForCausalLM.load_config(model_path)
+            logger.info(f"Model config: {config}")  # This will log the configuration, including rope_scaling
 
             self.model = await asyncio.to_thread(
                 MemoryEfficientShardedLlamaForCausalLM.from_pretrained,
@@ -272,3 +292,4 @@ class MedicalDiagnosisModel:
         self.tokenizer = None
         torch.cuda.empty_cache()
         logger.info("Model cleanup completed")
+
