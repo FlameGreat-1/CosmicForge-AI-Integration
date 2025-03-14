@@ -98,25 +98,32 @@ class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
         return model
 
     @staticmethod
-    def load_config(model_path):
-        config_path = os.path.join(model_path, "config.json")
-        with open(config_path, "r") as f:
-            config_dict = json.load(f)
-        
-        # Fix rope_scaling if it's present and not in the correct format
-        if "rope_scaling" in config_dict:
-            if isinstance(config_dict["rope_scaling"], dict):
-                if "type" not in config_dict["rope_scaling"] or "factor" not in config_dict["rope_scaling"]:
-                    config_dict["rope_scaling"] = {
-                        "type": "linear",
-                        "factor": 32.0
-                    }
-            else:
+    @staticmethod
+def load_config(model_path):
+    config_path = os.path.join(model_path, "config.json")
+    with open(config_path, "r") as f:
+        config_dict = json.load(f)
+    
+    # Fix rope_scaling if it's present and not in the correct format
+    if "rope_scaling" in config_dict:
+        rope_scaling = config_dict["rope_scaling"]
+        if isinstance(rope_scaling, dict):
+            if "type" not in rope_scaling or "factor" not in rope_scaling:
                 config_dict["rope_scaling"] = {
                     "type": "linear",
-                    "factor": 32.0
+                    "factor": rope_scaling.get("factor", 1.0)
                 }
-        
+        else:
+            config_dict["rope_scaling"] = {
+                "type": "linear",
+                "factor": 1.0
+            }
+    
+    # Remove any extra fields that are not part of the standard configuration
+    standard_fields = ["type", "factor"]
+    if "rope_scaling" in config_dict and isinstance(config_dict["rope_scaling"], dict):
+        config_dict["rope_scaling"] = {k: v for k, v in config_dict["rope_scaling"].items() if k in standard_fields}
+
         # Ensure other necessary parameters are present
         config_dict.setdefault("rope_theta", 10000)
         config_dict.setdefault("rope_scaling_factor", 1.0)
