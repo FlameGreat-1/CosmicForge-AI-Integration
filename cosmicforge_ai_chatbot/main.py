@@ -126,7 +126,10 @@ async def get_redoc_documentation():
 async def root():
     return RedirectResponse(url="/docs")    
 
+
 if __name__ == "__main__":
-    uvicorn.run("cosmicforge_ai_chatbot.main:app", host=Config.API_HOST, port=Config.API_PORT, reload=True)
+    
+    pass
+
 
  

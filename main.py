@@ -141,8 +141,7 @@ def run_medical_diagnosis():
         "main:app", 
         "--host", HOST, 
         "--port", str(DIAGNOSIS_PORT),
-        "--log-level", "info",
-        "--log-file", str(log_file)
+        "--log-level", "info"
     ]
     
     run_subprocess(cmd, "medical_diagnosis")
@@ -158,8 +157,7 @@ def run_medical_chatbot():
         "main:app", 
         "--host", HOST, 
         "--port", str(CHATBOT_PORT),
-        "--log-level", "info",
-        "--log-file", str(log_file)
+        "--log-level", "info"
     ]
     
     run_subprocess(cmd, "medical_chatbot")

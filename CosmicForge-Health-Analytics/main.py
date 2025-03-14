@@ -267,18 +267,24 @@ def shutdown():
 async def shutdown_event():
     shutdown()
 
+
 if __name__ == "__main__":
-    try:
-        logger.info("Starting Medical Health Analytics API")
-        uvicorn.run(
-            "main:app",
-            host=API_HOST,
-            port=API_PORT,
-            workers=API_WORKERS
-        )
-    except KeyboardInterrupt:
-        logger.info("Received keyboard interrupt")
-        shutdown()
-    except Exception as e:
-        log_exception(logger, e, "Error starting API server")
-        sys.exit(1)
+    import os
+    if os.environ.get("RUNNING_FROM_ORCHESTRATOR") != "true":
+        try:
+            logger.info("Starting Medical Health Analytics API in standalone mode")
+            uvicorn.run(
+                "main:app",
+                host=API_HOST,
+                port=API_PORT,
+                workers=API_WORKERS
+            )
+        except KeyboardInterrupt:
+            logger.info("Received keyboard interrupt")
+            shutdown()
+        except Exception as e:
+            log_exception(logger, e, "Error starting API server")
+            sys.exit(1)
+    else:
+        logger.info("Medical Health Analytics API ready for orchestrator management")
+

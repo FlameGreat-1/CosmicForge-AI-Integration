@@ -127,4 +127,7 @@ async def root():
     return RedirectResponse(url="/docs")    
 
 if __name__ == "__main__":
-    uvicorn.run("medical_diagnosis_system.main:app", host="0.0.0.0", port=Config.API_PORT, reload=True)
+    
+    pass
+
+ 
