@@ -80,7 +80,6 @@ def split_model_into_shards(model_path, shard_size=1000000000):
         logger.error(f"Error splitting model into shards: {str(e)}", exc_info=True)
         raise  
 
-
 class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
     def __init__(self, config):
         super().__init__(config)
@@ -90,39 +89,104 @@ class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
         self.device_map = None
         self.gradient_checkpointing_enable()
 
-    def load_shard(self, shard_id):
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        config = cls.load_config(pretrained_model_name_or_path)
+        model = cls(config)
+        model.load_pretrained_shards(pretrained_model_name_or_path)
+        return model
+
+    @staticmethod
+    def load_config(model_path):
+        config_path = os.path.join(model_path, "config.json")
+        with open(config_path, "r") as f:
+            config_dict = json.load(f)
+        
+        # Fix rope_scaling - simplified approach to ensure correct format
+        if "rope_scaling" in config_dict:
+            # Replace the entire rope_scaling with the correct format
+            config_dict["rope_scaling"] = {
+                "type": "linear",
+                "factor": 32.0
+            }
+            logger.info(f"Updated rope_scaling configuration: {config_dict['rope_scaling']}")
+        
+        return LlamaForCausalLM.config_class.from_dict(config_dict)
+
+    def load_pretrained_shards(self, model_path):
         model_shard_dir = os.path.join(DATA_DIR, "model_shards")
-        shard_path = os.path.join(model_shard_dir, f"model_shard_{shard_id}.pt")
-        if os.path.exists(shard_path):
-            self.loaded_shards[shard_id] = torch.load(shard_path, map_location='cpu')
-            self.load_state_dict(self.loaded_shards[shard_id], strict=False)
-        else:
-            logger.warning(f"Shard {shard_id} not found")
+        if not os.path.exists(model_shard_dir):
+            logger.warning(f"Model shard directory not found: {model_shard_dir}")
+            return
+            
+        shard_files = [f for f in os.listdir(model_shard_dir) if f.startswith("model_shard_") and f.endswith(".pt")]
+        if not shard_files:
+            logger.warning(f"No model shards found in {model_shard_dir}")
+            return
+            
+        logger.info(f"Found {len(shard_files)} model shards")
+        for shard_file in sorted(shard_files):
+            if shard_file.startswith("model_shard_") and shard_file.endswith(".pt"):
+                shard_id = int(shard_file.split("_")[-1].split(".")[0])
+                self.load_shard(shard_id)
+
+    def load_shard(self, shard_id):
+        try:
+            model_shard_dir = os.path.join(DATA_DIR, "model_shards")
+            shard_path = os.path.join(model_shard_dir, f"model_shard_{shard_id}.pt")
+            if os.path.exists(shard_path):
+                logger.info(f"Loading shard {shard_id} from {shard_path}")
+                self.loaded_shards[shard_id] = torch.load(shard_path, map_location='cpu')
+                self.load_state_dict(self.loaded_shards[shard_id], strict=False)
+                logger.info(f"Shard {shard_id} loaded successfully")
+            else:
+                logger.warning(f"Shard {shard_id} not found at {shard_path}")
+        except Exception as e:
+            logger.error(f"Error loading shard {shard_id}: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to load shard {shard_id}: {str(e)}")
 
     def unload_shard(self, shard_id):
-        if shard_id in self.loaded_shards:
-            del self.loaded_shards[shard_id]
-            torch.cuda.empty_cache()
+        try:
+            if shard_id in self.loaded_shards:
+                logger.info(f"Unloading shard {shard_id}")
+                del self.loaded_shards[shard_id]
+                torch.cuda.empty_cache()
+                logger.info(f"Shard {shard_id} unloaded successfully")
+        except Exception as e:
+            logger.error(f"Error unloading shard {shard_id}: {str(e)}", exc_info=True)
 
     def forward(self, input_ids, attention_mask=None, **kwargs):
-        required_shards = set(input_ids.div(self.shard_size, rounding_mode='floor').unique().tolist())
-        
-        for shard_id in required_shards:
-            if shard_id not in self.loaded_shards:
-                self.load_shard(shard_id)
-        
-        for shard_id in list(self.loaded_shards.keys()):
-            if shard_id not in required_shards:
-                self.unload_shard(shard_id)
-        
-        return super().forward(input_ids, attention_mask, **kwargs)
+        try:
+            required_shards = set(input_ids.div(self.shard_size, rounding_mode='floor').unique().tolist())
+            
+            logger.debug(f"Required shards for forward pass: {required_shards}")
+            
+            for shard_id in required_shards:
+                if shard_id not in self.loaded_shards:
+                    self.load_shard(shard_id)
+            
+            for shard_id in list(self.loaded_shards.keys()):
+                if shard_id not in required_shards:
+                    self.unload_shard(shard_id)
+            
+            return super().forward(input_ids, attention_mask, **kwargs)
+        except Exception as e:
+            logger.error(f"Error in forward pass: {str(e)}", exc_info=True)
+            raise
 
     def parallelize(self):
-        self.model_parallel = True
-        self.device_map = "auto"
-        self.deparallelize()
-        self.parallelize()
-
+        try:
+            logger.info("Parallelizing model across available GPUs")
+            self.model_parallel = True
+            self.device_map = "auto"
+            self.deparallelize()
+            self.parallelize()
+            logger.info("Model parallelization complete")
+        except Exception as e:
+            logger.error(f"Error parallelizing model: {str(e)}", exc_info=True)
+            logger.info("Continuing with non-parallelized model")
+            self.model_parallel = False
+            self.device_map = None
 
 class ModelInterface:
     _instance = None
@@ -174,7 +238,11 @@ class ModelInterface:
             else:
                 logger.info("GPU is not available. Loading model in 16-bit precision.")
                 quantization_config = None
-            config = LlamaForCausalLM.config_class.from_pretrained(model_path, local_files_only=True)
+            
+            # Use MemoryEfficientShardedLlamaForCausalLM.load_config to fix rope_scaling
+            config = MemoryEfficientShardedLlamaForCausalLM.load_config(model_path)
+            logger.info(f"Model config prepared with fixed rope_scaling")
+            
             self.model = await asyncio.to_thread(
                 MemoryEfficientShardedLlamaForCausalLM.from_pretrained,
                 model_path,
@@ -188,14 +256,15 @@ class ModelInterface:
 
             # Use model parallelism if multiple GPUs are available
             if torch.cuda.device_count() > 1:
+                logger.info("Multiple GPUs detected. Enabling model parallelism.")
                 self.model.parallelize()
 
             logger.info("Model loaded successfully")
             logger.info(f"Current memory usage: {psutil.virtual_memory().percent}%")
         except Exception as e:
             logger.error(f"Error loading model: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Failed to load the model")
-                                    
+            raise HTTPException(status_code=500, detail=f"Failed to load the model: {str(e)}")
+
     async def query_model(self, prompt: str) -> Dict[str, Any]:
         logger.info("Querying model")
         try:
@@ -337,20 +406,3 @@ class ModelInterface:
             await cls._instance.load_model()
         return cls._instance
 
-
-async def query_model(data: Dict[str, Any], prompt_type: str = "general") -> Dict[str, Any]:
-    try:
-        model_interface = await ModelInterface.get_instance()
-        prompt = model_interface.format_prompt(data, prompt_type)
-        response = await model_interface.query_model(prompt)
-
-        # Store the result in a variable
-        result = model_interface.process_response(response)
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            
-        return result
-    except Exception as e:
-        logger.error(f"Error in query_model function: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to process query: {str(e)}")

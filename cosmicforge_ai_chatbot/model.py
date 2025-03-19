@@ -103,35 +103,30 @@ class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
         with open(config_path, "r") as f:
             config_dict = json.load(f)
         
-        # Fix rope_scaling if it's present and not in the correct format
+        # Fix rope_scaling - simplified approach to ensure correct format
         if "rope_scaling" in config_dict:
-            rope_scaling = config_dict["rope_scaling"]
-            if isinstance(rope_scaling, dict):
-                if "type" not in rope_scaling or "factor" not in rope_scaling:
-                    config_dict["rope_scaling"] = {
-                        "type": "linear",
-                        "factor": rope_scaling.get("factor", 1.0)
-                    }
-            else:
-                config_dict["rope_scaling"] = {
-                    "type": "linear",
-                    "factor": 1.0
-                }
+            # Replace the entire rope_scaling with the correct format
+            config_dict["rope_scaling"] = {
+                "type": "linear",
+                "factor": 32.0
+            }
+            logger.info(f"Updated rope_scaling configuration: {config_dict['rope_scaling']}")
         
-        # Remove any extra fields that are not part of the standard configuration
-        standard_fields = ["type", "factor"]
-        if "rope_scaling" in config_dict and isinstance(config_dict["rope_scaling"], dict):
-            config_dict["rope_scaling"] = {k: v for k, v in config_dict["rope_scaling"].items() if k in standard_fields}
-
-            # Ensure other necessary parameters are present
-            config_dict.setdefault("rope_theta", 10000)
-            config_dict.setdefault("rope_scaling_factor", 1.0)
-            
-            return LlamaForCausalLM.config_class.from_dict(config_dict)
+        return LlamaForCausalLM.config_class.from_dict(config_dict)
 
     def load_pretrained_shards(self, model_path):
         model_shard_dir = os.path.join(Config.DATA_DIR, "model_shards")
-        for shard_file in os.listdir(model_shard_dir):
+        if not os.path.exists(model_shard_dir):
+            logger.warning(f"Model shard directory not found: {model_shard_dir}")
+            return
+            
+        shard_files = [f for f in os.listdir(model_shard_dir) if f.startswith("model_shard_") and f.endswith(".pt")]
+        if not shard_files:
+            logger.warning(f"No model shards found in {model_shard_dir}")
+            return
+            
+        logger.info(f"Found {len(shard_files)} model shards")
+        for shard_file in sorted(shard_files):
             if shard_file.startswith("model_shard_") and shard_file.endswith(".pt"):
                 shard_id = int(shard_file.split("_")[-1].split(".")[0])
                 self.load_shard(shard_id)
@@ -141,39 +136,58 @@ class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
             model_shard_dir = os.path.join(Config.DATA_DIR, "model_shards")
             shard_path = os.path.join(model_shard_dir, f"model_shard_{shard_id}.pt")
             if os.path.exists(shard_path):
+                logger.info(f"Loading shard {shard_id} from {shard_path}")
                 self.loaded_shards[shard_id] = torch.load(shard_path, map_location='cpu')
                 self.load_state_dict(self.loaded_shards[shard_id], strict=False)
+                logger.info(f"Shard {shard_id} loaded successfully")
             else:
-                logger.warning(f"Shard {shard_id} not found")
+                logger.warning(f"Shard {shard_id} not found at {shard_path}")
         except Exception as e:
             logger.error(f"Error loading shard {shard_id}: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to load shard {shard_id}: {str(e)}")
 
     def unload_shard(self, shard_id):
         try:
             if shard_id in self.loaded_shards:
+                logger.info(f"Unloading shard {shard_id}")
                 del self.loaded_shards[shard_id]
                 torch.cuda.empty_cache()
+                logger.info(f"Shard {shard_id} unloaded successfully")
         except Exception as e:
             logger.error(f"Error unloading shard {shard_id}: {str(e)}", exc_info=True)
 
     def forward(self, input_ids, attention_mask=None, **kwargs):
-        required_shards = set(input_ids.div(self.shard_size, rounding_mode='floor').unique().tolist())
-        
-        for shard_id in required_shards:
-            if shard_id not in self.loaded_shards:
-                self.load_shard(shard_id)
-        
-        for shard_id in list(self.loaded_shards.keys()):
-            if shard_id not in required_shards:
-                self.unload_shard(shard_id)
-        
-        return super().forward(input_ids, attention_mask, **kwargs)
+        try:
+            required_shards = set(input_ids.div(self.shard_size, rounding_mode='floor').unique().tolist())
+            
+            logger.debug(f"Required shards for forward pass: {required_shards}")
+            
+            for shard_id in required_shards:
+                if shard_id not in self.loaded_shards:
+                    self.load_shard(shard_id)
+            
+            for shard_id in list(self.loaded_shards.keys()):
+                if shard_id not in required_shards:
+                    self.unload_shard(shard_id)
+            
+            return super().forward(input_ids, attention_mask, **kwargs)
+        except Exception as e:
+            logger.error(f"Error in forward pass: {str(e)}", exc_info=True)
+            raise
 
     def parallelize(self):
-        self.model_parallel = True
-        self.device_map = "auto"
-        self.deparallelize()
-        self.parallelize()
+        try:
+            logger.info("Parallelizing model across available GPUs")
+            self.model_parallel = True
+            self.device_map = "auto"
+            self.deparallelize()
+            self.parallelize()
+            logger.info("Model parallelization complete")
+        except Exception as e:
+            logger.error(f"Error parallelizing model: {str(e)}", exc_info=True)
+            logger.info("Continuing with non-parallelized model")
+            self.model_parallel = False
+            self.device_map = None
 
 class CosmicForgeAIChatbot:
     _instance = None
