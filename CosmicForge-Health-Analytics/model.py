@@ -23,11 +23,33 @@ def split_model_into_shards(model_path, shard_size=1000000000):
     model_shard_dir = os.path.join(DATA_DIR, "model_shards")
     os.makedirs(model_shard_dir, exist_ok=True)
 
+    # Check if model is already sharded
+    if any(file.startswith("model_shard_") for file in os.listdir(model_shard_dir)):
+        logger.info("Model is already sharded. Skipping sharding process.")
+        return model_shard_dir
+
     try:
         logger.info(f"Loading model from local path: {model_path}")
+        
+        # Fix rope_scaling in config before loading model
+        config_path = os.path.join(model_path, "config.json")
+        with open(config_path, "r") as f:
+            config_dict = json.load(f)
+        
+        if "rope_scaling" in config_dict:
+            logger.info(f"Original rope_scaling: {config_dict['rope_scaling']}")
+            config_dict["rope_scaling"] = {
+                "type": "linear",
+                "factor": 32.0
+            }
+            logger.info(f"Updated rope_scaling: {config_dict['rope_scaling']}")
+        
+        config = LlamaForCausalLM.config_class.from_dict(config_dict)
+        
         model = LlamaForCausalLM.from_pretrained(
             model_path, 
-            local_files_only=True,  
+            local_files_only=True,
+            config=config,
             low_cpu_mem_usage=True
         )
         
@@ -78,7 +100,7 @@ def split_model_into_shards(model_path, shard_size=1000000000):
         
     except Exception as e:
         logger.error(f"Error splitting model into shards: {str(e)}", exc_info=True)
-        raise  
+        raise
 
 class MemoryEfficientShardedLlamaForCausalLM(LlamaForCausalLM):
     def __init__(self, config):

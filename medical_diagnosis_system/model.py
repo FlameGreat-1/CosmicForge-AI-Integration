@@ -28,10 +28,27 @@ def split_model_into_shards(model_path, shard_size=1000000000):
     
     try:
         logger.info(f"Loading model from local path: {model_path}")
+        
+        # Fix rope_scaling in config before loading model
+        config_path = os.path.join(model_path, "config.json")
+        with open(config_path, "r") as f:
+            config_dict = json.load(f)
+        
+        if "rope_scaling" in config_dict:
+            logger.info(f"Original rope_scaling: {config_dict['rope_scaling']}")
+            config_dict["rope_scaling"] = {
+                "type": "linear",
+                "factor": 32.0
+            }
+            logger.info(f"Updated rope_scaling: {config_dict['rope_scaling']}")
+        
+        config = LlamaForCausalLM.config_class.from_dict(config_dict)
+        
         with torch.no_grad():
             model = LlamaForCausalLM.from_pretrained(
                 model_path, 
-                local_files_only=True,  
+                local_files_only=True,
+                config=config,
                 low_cpu_mem_usage=True
             )
         
